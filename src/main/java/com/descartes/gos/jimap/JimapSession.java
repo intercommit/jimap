@@ -1,6 +1,7 @@
 package com.descartes.gos.jimap;
 
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.apache.james.imap.api.ImapSessionState;
 import org.apache.james.imap.api.process.ImapLineHandler;
@@ -17,18 +18,20 @@ import org.slf4j.LoggerFactory;
  */
 public class JimapSession implements ImapSession {
 
-	private static Logger log = LoggerFactory.getLogger(JimapSession.class);
+	private static AtomicLong sessionId = new AtomicLong();;
 
 	private ConcurrentHashMap<String, Object> attr = new ConcurrentHashMap<String, Object>();
 	private ImapSessionState state = ImapSessionState.NON_AUTHENTICATED;
 	private SelectedMailbox mailbox;
 	
+	private Logger log = LoggerFactory.getLogger("ImapSession." + sessionId.incrementAndGet());
 	
 	public Logger getLog() {
 		return log;
 	}
 
 	public void logout() {
+		closeMailbox();
 		state = ImapSessionState.LOGOUT;
 	}
 
@@ -41,18 +44,27 @@ public class JimapSession implements ImapSession {
 	}
 
 	public void selected(SelectedMailbox mailbox) {
-		this.mailbox = mailbox;
 		state = ImapSessionState.SELECTED; 
+		closeMailbox();
+		this.mailbox = mailbox;
 	}
 
 	public void deselect() {
 		state = ImapSessionState.AUTHENTICATED; 
-		
+		closeMailbox();
 	}
 
 	public SelectedMailbox getSelected() {
 		return mailbox;
 	}
+	
+    private void closeMailbox() {
+        
+    	if (mailbox != null) {
+            mailbox.deselect();
+            mailbox = null;
+        }
+    }
 
 	public Object getAttribute(String key) {
 		return (key == null ? null : attr.get(key));

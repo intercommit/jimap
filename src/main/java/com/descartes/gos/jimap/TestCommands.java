@@ -4,25 +4,23 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
-import java.util.HashSet;
-import java.util.concurrent.TimeUnit;
 
-import org.apache.james.imap.api.message.response.StatusResponseFactory;
+import org.apache.james.imap.api.process.ImapProcessor;
 import org.apache.james.imap.decode.main.DefaultImapDecoder;
 import org.apache.james.imap.decode.main.ImapRequestStreamHandler;
 import org.apache.james.imap.encode.VanishedResponseEncoder;
 import org.apache.james.imap.encode.main.DefaultImapEncoderFactory;
+import org.apache.james.imap.encode.main.DefaultLocalizer;
 import org.apache.james.imap.main.DefaultImapDecoderFactory;
-import org.apache.james.imap.message.response.UnpooledStatusResponseFactory;
-import org.apache.james.imap.processor.DefaultProcessorChain;
-import org.apache.james.imap.processor.EnableProcessor;
-import org.apache.james.imap.processor.base.UnknownRequestProcessor;
+import org.apache.james.imap.processor.main.DefaultImapProcessorFactory;
 import org.apache.james.mailbox.acl.GroupMembershipResolver;
 import org.apache.james.mailbox.acl.MailboxACLResolver;
 import org.apache.james.mailbox.acl.SimpleGroupMembershipResolver;
 import org.apache.james.mailbox.acl.UnionMailboxACLResolver;
 import org.apache.james.mailbox.inmemory.InMemoryMailboxSessionMapperFactory;
+import org.apache.james.mailbox.store.Authenticator;
 import org.apache.james.mailbox.store.StoreMailboxManager;
+import org.apache.james.mailbox.store.StoreSubscriptionManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -61,25 +59,25 @@ public class TestCommands {
 	 */
 	private void runClientCommands(String[] commands) throws Exception {
 		
+		DefaultLocalizer localizer = new DefaultLocalizer();
 		// Set imap encoder chain.
-		VanishedResponseEncoder imapEncoder = (VanishedResponseEncoder) DefaultImapEncoderFactory.createDefaultEncoder(new JimapLocalizer(), false);
+		VanishedResponseEncoder imapEncoder = (VanishedResponseEncoder) DefaultImapEncoderFactory.createDefaultEncoder(localizer, false);
 		
 		// Setup imap decoder.
-		DefaultImapDecoder imapDecoder = (DefaultImapDecoder)DefaultImapDecoderFactory.createDecoder();
-		// StatusResponseFactory srf is the same as the one used in imapDecoder 
-		// (but that field is private, so create a new one)
-		StatusResponseFactory srf = new UnpooledStatusResponseFactory();
+		DefaultImapDecoder imapDecoder = (DefaultImapDecoder) DefaultImapDecoderFactory.createDecoder();
 		
 		// Setup an in-memory mailbox, required to setup a processor chain.
         InMemoryMailboxSessionMapperFactory sessionMapper = new InMemoryMailboxSessionMapperFactory();
+        Authenticator authenticator = new JimapAuthenticator();
         MailboxACLResolver aclResolver = new UnionMailboxACLResolver();
         GroupMembershipResolver groupMembershipResolver = new SimpleGroupMembershipResolver();
-        StoreMailboxManager<Long> mailboxManager = new StoreMailboxManager<Long>(sessionMapper, new JimapAuthenticator(), aclResolver, groupMembershipResolver);
+        
+        StoreMailboxManager<Long> mailboxManager = new StoreMailboxManager<Long>(sessionMapper, authenticator, aclResolver, groupMembershipResolver);
         mailboxManager.init();
-
+        
         // Create the processor chain
-        EnableProcessor processor = (EnableProcessor) DefaultProcessorChain.createDefaultChain(new UnknownRequestProcessor(srf), mailboxManager, 
-				new JimapSubscriptionManager(), srf, new JimapMailboxTyper(), 5000L, TimeUnit.MILLISECONDS, new HashSet<String>());
+        StoreSubscriptionManager subscriptionManager = new StoreSubscriptionManager(sessionMapper);
+        ImapProcessor processor = DefaultImapProcessorFactory.createDefaultProcessor(mailboxManager, subscriptionManager);
 		
         // Create handler that captures server response for client commands.
         ImapRequestStreamHandler irs = new ImapRequestStreamHandler(imapDecoder, processor, imapEncoder);
@@ -96,84 +94,85 @@ public class TestCommands {
 	 */
 	private void handleLine(String line, ImapRequestStreamHandler irs, JimapSession session) throws Exception {
 		
-        log.info("C:\n" + line);
+        session.getLog().info("C:\n" + line);
         line += "\n"; // Line should end with CRLF, but just LF also works.
 		ByteArrayInputStream bin = new ByteArrayInputStream(line.getBytes(CS));
         ByteArrayOutputStream bout = new ByteArrayOutputStream();
         irs.handleRequest(bin, bout, session);
         String s = new String(bout.toByteArray(), CS);
         s = s.substring(0,  s.lastIndexOf('\r')); // Server response always ends with CRLF, but logging already adds a LF.
-		log.info("S:\n" + s);
+        session.getLog().info("S:\n" + s);
 	}
 }
 /*
 Expected output:
 
-09:47:50.003 [main] INFO  com.descartes.gos.jimap.TestCommands - C:
+12:37:19.659 [main] INFO  ImapSession.1 - C:
 A001 LOGIN mrc secret
-09:47:50.019 [main] DEBUG com.descartes.gos.jimap.JimapSession - Got <tag>: A001
-09:47:50.019 [main] DEBUG com.descartes.gos.jimap.JimapSession - Got <command>: LOGIN
-09:47:50.019 [main] DEBUG com.descartes.gos.jimap.JimapSession - Session attribute [INVALID_COMMAND_COUNT]=[0]
-09:47:50.019 [main] DEBUG com.descartes.gos.jimap.JimapSession - Session attribute [org.apache.james.api.imap.MAILBOX_SESSION_ATTRIBUTE_SESSION_KEY]=[MailboxSession ( sessionId = 3869451373015414172 open = true  )]
-09:47:50.019 [main] DEBUG com.descartes.gos.jimap.JimapSession - INBOX does not exist. Creating it.
-09:47:50.019 [main] DEBUG com.descartes.gos.jimap.JimapSession - createMailbox #private:mrc:INBOX
-09:47:50.019 [main] INFO  com.descartes.gos.jimap.TestCommands - S:
+12:37:19.668 [main] DEBUG ImapSession.1 - Got <tag>: A001
+12:37:19.668 [main] DEBUG ImapSession.1 - Got <command>: LOGIN
+12:37:19.669 [main] DEBUG ImapSession.1 - Session attribute [INVALID_COMMAND_COUNT]=[0]
+12:37:19.672 [main] DEBUG ImapSession.1 - Session attribute [org.apache.james.api.imap.MAILBOX_SESSION_ATTRIBUTE_SESSION_KEY]=[MailboxSession ( sessionId = -5906446043418841451 open = true  )]
+12:37:19.673 [main] DEBUG ImapSession.1 - INBOX does not exist. Creating it.
+12:37:19.673 [main] DEBUG ImapSession.1 - createMailbox #private:mrc:INBOX
+12:37:19.683 [main] INFO  ImapSession.1 - S:
 A001 OK LOGIN completed.
-09:47:50.019 [main] INFO  com.descartes.gos.jimap.TestCommands - C:
+12:37:19.684 [main] INFO  ImapSession.1 - C:
 A002 SELECT "INBOX"
-09:47:50.019 [main] DEBUG com.descartes.gos.jimap.JimapSession - Got <tag>: A002
-09:47:50.019 [main] DEBUG com.descartes.gos.jimap.JimapSession - Got <command>: SELECT
-09:47:50.019 [main] DEBUG com.descartes.gos.jimap.JimapSession - Session attribute [INVALID_COMMAND_COUNT]=[0]
-09:47:50.019 [main] DEBUG com.descartes.gos.jimap.JimapSession - Loaded mailbox #private:mrc:INBOX
-09:47:50.034 [main] DEBUG com.descartes.gos.jimap.JimapSession - Loaded mailbox #private:mrc:INBOX
-09:47:50.034 [main] DEBUG com.descartes.gos.jimap.JimapSession - Session attribute [SEARCHRES_SAVED_SET]=[<null>]
-09:47:50.034 [main] DEBUG com.descartes.gos.jimap.JimapSession - Removing value for key [SEARCHRES_SAVED_SET]
-09:47:50.034 [main] INFO  com.descartes.gos.jimap.TestCommands - S:
+12:37:19.684 [main] DEBUG ImapSession.1 - Got <tag>: A002
+12:37:19.684 [main] DEBUG ImapSession.1 - Got <command>: SELECT
+12:37:19.685 [main] DEBUG ImapSession.1 - Session attribute [INVALID_COMMAND_COUNT]=[0]
+12:37:19.685 [main] DEBUG ImapSession.1 - Loaded mailbox #private:mrc:INBOX
+12:37:19.696 [main] DEBUG ImapSession.1 - Loaded mailbox #private:mrc:INBOX
+12:37:19.704 [main] DEBUG ImapSession.1 - Session attribute [SEARCHRES_SAVED_SET]=[<null>]
+12:37:19.704 [main] DEBUG ImapSession.1 - Removing value for key [SEARCHRES_SAVED_SET]
+12:37:19.705 [main] INFO  ImapSession.1 - S:
 * FLAGS (\Answered \Deleted \Draft \Flagged \Seen)
 * 0 EXISTS
 * 0 RECENT
-* OK [UIDVALIDITY 136448498] UIDs valid
+* OK [UIDVALIDITY 1940001560] UIDs valid
 * OK [PERMANENTFLAGS (\Answered \Deleted \Draft \Flagged \Seen)] Limited
 * OK [HIGHESTMODSEQ 0] Highest
 * OK [UIDNEXT 1] Predicted next UID
 A002 OK [READ-WRITE] SELECT completed.
-09:47:50.034 [main] INFO  com.descartes.gos.jimap.TestCommands - C:
+12:37:19.705 [main] INFO  ImapSession.1 - C:
 A153 SEARCH NOT Deleted
-09:47:50.050 [main] DEBUG com.descartes.gos.jimap.JimapSession - Got <tag>: A153
-09:47:50.050 [main] DEBUG com.descartes.gos.jimap.JimapSession - Got <command>: SEARCH
-09:47:50.050 [main] DEBUG com.descartes.gos.jimap.JimapSession - Session attribute [INVALID_COMMAND_COUNT]=[0]
-09:47:50.050 [main] DEBUG com.descartes.gos.jimap.JimapSession - Loaded mailbox #private:mrc:INBOX
-09:47:50.050 [main] DEBUG com.descartes.gos.jimap.JimapSession - Loaded mailbox #private:mrc:INBOX
-09:47:50.050 [main] DEBUG com.descartes.gos.jimap.JimapSession - Session attribute [SEARCH_MODSEQ]=[<null>]
-09:47:50.050 [main] DEBUG com.descartes.gos.jimap.JimapSession - Removing value for key [SEARCH_MODSEQ]
-09:47:50.050 [main] INFO  com.descartes.gos.jimap.TestCommands - S:
+12:37:19.705 [main] DEBUG ImapSession.1 - Got <tag>: A153
+12:37:19.705 [main] DEBUG ImapSession.1 - Got <command>: SEARCH
+12:37:19.707 [main] DEBUG ImapSession.1 - Session attribute [INVALID_COMMAND_COUNT]=[0]
+12:37:19.707 [main] DEBUG ImapSession.1 - Loaded mailbox #private:mrc:INBOX
+12:37:19.720 [main] DEBUG ImapSession.1 - Loaded mailbox #private:mrc:INBOX
+12:37:19.720 [main] DEBUG ImapSession.1 - Session attribute [SEARCH_MODSEQ]=[<null>]
+12:37:19.720 [main] DEBUG ImapSession.1 - Removing value for key [SEARCH_MODSEQ]
+12:37:19.720 [main] INFO  ImapSession.1 - S:
 * SEARCH
 A153 OK SEARCH completed.
-09:47:50.050 [main] INFO  com.descartes.gos.jimap.TestCommands - C:
+12:37:19.720 [main] INFO  ImapSession.1 - C:
 A164 EXPUNGE
-09:47:50.050 [main] DEBUG com.descartes.gos.jimap.JimapSession - Got <tag>: A164
-09:47:50.050 [main] DEBUG com.descartes.gos.jimap.JimapSession - Got <command>: EXPUNGE
-09:47:50.066 [main] DEBUG com.descartes.gos.jimap.JimapSession - Session attribute [INVALID_COMMAND_COUNT]=[0]
-09:47:50.066 [main] DEBUG com.descartes.gos.jimap.JimapSession - Loaded mailbox #private:mrc:INBOX
-09:47:50.066 [main] DEBUG com.descartes.gos.jimap.JimapSession - Loaded mailbox #private:mrc:INBOX
-09:47:50.066 [main] DEBUG com.descartes.gos.jimap.JimapSession - Session attribute [ENABLED_CAPABILITIES]=[[]]
-09:47:50.066 [main] INFO  com.descartes.gos.jimap.TestCommands - S:
+12:37:19.720 [main] DEBUG ImapSession.1 - Got <tag>: A164
+12:37:19.721 [main] DEBUG ImapSession.1 - Got <command>: EXPUNGE
+12:37:19.721 [main] DEBUG ImapSession.1 - Session attribute [INVALID_COMMAND_COUNT]=[0]
+12:37:19.721 [main] DEBUG ImapSession.1 - Loaded mailbox #private:mrc:INBOX
+12:37:19.721 [main] DEBUG ImapSession.1 - Loaded mailbox #private:mrc:INBOX
+12:37:19.721 [main] DEBUG ImapSession.1 - Session attribute [ENABLED_CAPABILITIES]=[[]]
+12:37:19.722 [main] INFO  ImapSession.1 - S:
 A164 OK EXPUNGE completed.
-09:47:50.066 [main] INFO  com.descartes.gos.jimap.TestCommands - C:
+12:37:19.722 [main] INFO  ImapSession.1 - C:
 A003 NOOP
-09:47:50.066 [main] DEBUG com.descartes.gos.jimap.JimapSession - Got <tag>: A003
-09:47:50.066 [main] DEBUG com.descartes.gos.jimap.JimapSession - Got <command>: NOOP
-09:47:50.066 [main] DEBUG com.descartes.gos.jimap.JimapSession - Session attribute [INVALID_COMMAND_COUNT]=[0]
-09:47:50.066 [main] DEBUG com.descartes.gos.jimap.JimapSession - Loaded mailbox #private:mrc:INBOX
-09:47:50.066 [main] INFO  com.descartes.gos.jimap.TestCommands - S:
+12:37:19.722 [main] DEBUG ImapSession.1 - Got <tag>: A003
+12:37:19.722 [main] DEBUG ImapSession.1 - Got <command>: NOOP
+12:37:19.722 [main] DEBUG ImapSession.1 - Session attribute [INVALID_COMMAND_COUNT]=[0]
+12:37:19.722 [main] DEBUG ImapSession.1 - Loaded mailbox #private:mrc:INBOX
+12:37:19.722 [main] INFO  ImapSession.1 - S:
 A003 OK NOOP completed.
-09:47:50.066 [main] INFO  com.descartes.gos.jimap.TestCommands - C:
+12:37:19.722 [main] INFO  ImapSession.1 - C:
 A004 LOGOUT
-09:47:50.066 [main] DEBUG com.descartes.gos.jimap.JimapSession - Got <tag>: A004
-09:47:50.066 [main] DEBUG com.descartes.gos.jimap.JimapSession - Got <command>: LOGOUT
-09:47:50.066 [main] DEBUG com.descartes.gos.jimap.JimapSession - Session attribute [INVALID_COMMAND_COUNT]=[0]
-09:47:50.066 [main] INFO  com.descartes.gos.jimap.TestCommands - S:
+12:37:19.722 [main] DEBUG ImapSession.1 - Got <tag>: A004
+12:37:19.722 [main] DEBUG ImapSession.1 - Got <command>: LOGOUT
+12:37:19.722 [main] DEBUG ImapSession.1 - Session attribute [INVALID_COMMAND_COUNT]=[0]
+12:37:19.722 [main] INFO  ImapSession.1 - S:
 * BYE IMAP4rev1 Server logging out
 A004 OK LOGOUT completed.
+
 */
 
