@@ -7,7 +7,7 @@ to use the Apache James IMAP protocols package in a custom environment
 (Maven dependency org.apache.james.protocols:protocols-imap:1.6.3).
 
 In short, look at the "runClientCommands" method in class TestCommands:
-https://./src/main/java/com/descartes/gos/jimap/TestCommands.java
+http://./src/main/java/com/descartes/gos/jimap/TestCommands.java
 
 Apache James IMAP website is at:
 http://james.apache.org/protocols/imap4.html
